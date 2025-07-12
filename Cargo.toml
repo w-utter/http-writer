@@ -1,0 +1,11 @@
+[package]
+name = "http_write"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+
+httparse = "1.10"
+fluent-uri = "0.3"
+http = "1.3"
