@@ -50,7 +50,7 @@ pub(crate) unsafe fn write_header_unchecked<W: std::io::Write>(
     len
 }
 
-pub(crate) struct EmptyHeaders<'a>(PhantomData<&'a ()>);
+pub struct EmptyHeaders<'a>(PhantomData<&'a ()>);
 
 impl<'a> EmptyHeaders<'a> {
     fn new() -> Self {

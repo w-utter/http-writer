@@ -19,6 +19,42 @@ impl<'a> Request<'a, EmptyHeaders<'a>, version::UNSPECIFIED> {
             version: version::UNSPECIFIED,
         }
     }
+
+    pub fn get() -> Self {
+        Self::new(Method::Get)
+    }
+
+    pub fn head() -> Self {
+        Self::new(Method::Head)
+    }
+
+    pub fn post() -> Self {
+        Self::new(Method::Post)
+    }
+
+    pub fn put() -> Self {
+        Self::new(Method::Put)
+    }
+
+    pub fn delete() -> Self {
+        Self::new(Method::Delete)
+    }
+
+    pub fn connect() -> Self {
+        Self::new(Method::Connect)
+    }
+
+    pub fn options() -> Self {
+        Self::new(Method::Options)
+    }
+
+    pub fn trace() -> Self {
+        Self::new(Method::Trace)
+    }
+
+    pub fn patch() -> Self {
+        Self::new(Method::Patch)
+    }
 }
 
 impl<'a, T, V> Request<'a, T, V> {
