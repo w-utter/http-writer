@@ -89,7 +89,7 @@ where
         let code = self.code.as_str();
         let reason = self.code.canonical_reason().unwrap_or_default();
 
-        write!(w, "HTTP/{version} {code} {reason}\r\n").unwrap();
+        write!(w, "HTTP/{version} {code} {reason}\r\n")?;
 
         let mut len = 9 + version.len() + code.len() + reason.len();
 
@@ -97,28 +97,28 @@ where
             len += crate::write_header(w, header).map_err(|e| (len, e))?;
         }
 
-        write!(w, "\r\n").unwrap();
+        write!(w, "\r\n")?;
         Ok(len + 2)
     }
 
     /// # Safety
     ///
     /// Caller must guarantee that all response fields are valid.
-    pub unsafe fn write_to_unchecked<W: std::io::Write>(&mut self, w: &mut W) -> usize {
+    pub unsafe fn write_to_unchecked<W: std::io::Write>(&mut self, w: &mut W) -> std::io::Result<usize> {
         let code = self.code.as_str();
         let reason = self.code.canonical_reason().unwrap_or_default();
         let version = self.version.as_str();
 
-        write!(w, "HTTP/{version} {code} {reason}\r\n").unwrap();
+        write!(w, "HTTP/{version} {code} {reason}\r\n")?;
 
         let mut len = 9 + version.len() + code.len() + reason.len();
 
         for header in &mut self.headers {
-            len += unsafe { crate::write_header_unchecked(w, header) };
+            len += unsafe { crate::write_header_unchecked(w, header)? };
         }
 
-        write!(w, "\r\n").unwrap();
-        len + 2
+        write!(w, "\r\n")?;
+        Ok(len + 2)
     }
 }
 
@@ -129,11 +129,18 @@ pub enum ResponseWriteError {
         buffer_offset: usize,
         err: HeaderWriteError,
     },
+    Io,
 }
 
 impl From<(usize, HeaderWriteError)> for ResponseWriteError {
     fn from((buffer_offset, err): (usize, HeaderWriteError)) -> ResponseWriteError {
         ResponseWriteError::InvalidHeader { buffer_offset, err }
+    }
+}
+
+impl From<std::io::Error> for ResponseWriteError {
+    fn from(_: std::io::Error) -> ResponseWriteError {
+       ResponseWriteError::Io
     }
 }
 

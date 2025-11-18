@@ -12,6 +12,13 @@ pub use version::Version;
 pub enum HeaderWriteError {
     InvalidName(usize),
     InvalidValue(usize),
+    Io,
+}
+
+impl From<std::io::Error> for HeaderWriteError {
+    fn from(_: std::io::Error) -> HeaderWriteError {
+        HeaderWriteError::Io
+    }
 }
 
 pub(crate) fn write_header<W: std::io::Write>(
@@ -33,21 +40,21 @@ pub(crate) fn write_header<W: std::io::Write>(
         return Err(HeaderWriteError::InvalidValue(pos));
     }
     // SAFETY: header is valid
-    Ok(unsafe { write_header_unchecked(w, header) })
+    Ok(unsafe { write_header_unchecked(w, header)? })
 }
 
 pub(crate) unsafe fn write_header_unchecked<W: std::io::Write>(
     w: &mut W,
     header: Header<'_>,
-) -> usize {
+) -> std::io::Result<usize> {
     let mut len = 0;
-    len += w.write(header.name.as_bytes()).unwrap();
-    write!(w, ": ").unwrap();
+    len += w.write(header.name.as_bytes())?;
+    write!(w, ": ")?;
     len += 2;
-    len += w.write(header.value).unwrap();
-    write!(w, "\r\n").unwrap();
+    len += w.write(header.value)?;
+    write!(w, "\r\n")?;
     len += 2;
-    len
+    Ok(len)
 }
 
 pub struct EmptyHeaders<'a>(PhantomData<&'a ()>);
@@ -60,6 +67,22 @@ impl<'a> EmptyHeaders<'a> {
 
 impl<'a> Iterator for EmptyHeaders<'a> {
     type Item = Header<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        None
+    }
+}
+
+pub struct EmptyQueries<'a>(PhantomData<&'a ()>);
+
+impl<'a> EmptyQueries<'a> {
+    fn new() -> Self {
+        Self(PhantomData)
+    }
+}
+
+impl<'a> Iterator for EmptyQueries<'a> {
+    type Item = crate::request::Query<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         None

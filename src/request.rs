@@ -1,22 +1,24 @@
-use crate::{EmptyHeaders, HeaderWriteError, Version, version};
+use crate::{EmptyHeaders, EmptyQueries, HeaderWriteError, Version, version};
 use core::iter::{self, Chain, Once};
 use httparse::Header;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Request<'a, T, V> {
+pub struct Request<'a, T, Q, V> {
     path: Option<&'a str>,
     method: Method<'a>,
     headers: T,
     version: V,
+    queries: Q,
 }
 
-impl<'a> Request<'a, EmptyHeaders<'a>, version::UNSPECIFIED> {
+impl<'a> Request<'a, EmptyHeaders<'a>, EmptyQueries<'a>, version::UNSPECIFIED> {
     pub fn new(method: Method<'a>) -> Self {
         Self {
             path: None,
             method,
             headers: EmptyHeaders::new(),
             version: version::UNSPECIFIED,
+            queries: EmptyQueries::new(),
         }
     }
 
@@ -57,18 +59,19 @@ impl<'a> Request<'a, EmptyHeaders<'a>, version::UNSPECIFIED> {
     }
 }
 
-impl<'a, T, V> Request<'a, T, V> {
+impl<'a, T, Q, V> Request<'a, T, Q, V> {
     pub fn path(mut self, path: &'a str) -> Self {
         self.path = Some(path);
         self
     }
 
-    pub fn version<V2>(self, version: V2) -> Request<'a, T, V2> {
+    pub fn version<V2>(self, version: V2) -> Request<'a, T, Q, V2> {
         let Self {
             path,
             headers,
             method,
             version: _,
+            queries,
         } = self;
 
         Request {
@@ -76,19 +79,20 @@ impl<'a, T, V> Request<'a, T, V> {
             headers,
             method,
             version,
+            queries,
         }
     }
 
-    pub fn v1(self) -> Request<'a, T, version::V1> {
+    pub fn v1(self) -> Request<'a, T, Q, version::V1> {
         self.version(version::V1)
     }
 
-    pub fn v1_1(self) -> Request<'a, T, version::V1_1> {
+    pub fn v1_1(self) -> Request<'a, T, Q, version::V1_1> {
         self.version(version::V1_1)
     }
 }
 
-impl<'a, T, V> Request<'a, T, V>
+impl<'a, T, Q, V> Request<'a, T, Q, V>
 where
     T: Iterator<Item = Header<'a>>,
 {
@@ -96,17 +100,18 @@ where
         self,
         name: &'a str,
         value: &'a [u8],
-    ) -> Request<'a, Chain<T, Once<Header<'a>>>, V> {
+    ) -> Request<'a, Chain<T, Once<Header<'a>>>, Q, V> {
         let h = Header { name, value };
         self.headers(iter::once(h))
     }
 
-    pub fn headers<H: Iterator<Item = Header<'a>>>(self, h: H) -> Request<'a, Chain<T, H>, V> {
+    pub fn headers<H: Iterator<Item = Header<'a>>>(self, h: H) -> Request<'a, Chain<T, H>, Q, V> {
         let Self {
             path,
             headers,
             method,
             version,
+            queries,
         } = self;
 
         let headers = headers.chain(h);
@@ -116,13 +121,58 @@ where
             headers,
             method,
             version,
+            queries,
         }
     }
 }
 
-impl<'a, T, V> Request<'a, T, V>
+pub struct Query<'a> {
+    q: &'a str,
+}
+
+impl <'a> Query<'a> {
+    pub fn new(query: &'a str) -> Self {
+        Self {
+            q: query,
+        }
+    }
+}
+
+impl<'a, T, Q, V> Request<'a, T, Q, V>
+where
+    Q: Iterator<Item = Query<'a>>,
+{
+    pub fn query(self, q: &'a str) -> Request<'a, T, Chain<Q, Once<Query<'a>>>, V> {
+        let q = Query::new(q);
+        self.queries(iter::once(q))
+    }
+
+    pub fn queries<Qs: Iterator<Item = Query<'a>>>(self, qs: Qs) -> Request<'a, T, Chain<Q, Qs>, V> {
+        let Self {
+            path,
+            headers,
+            method,
+            version,
+            queries,
+        } = self;
+
+        let queries = queries.chain(qs);
+
+        Request {
+            path,
+            headers,
+            method,
+            version,
+            queries,
+        }
+
+    }
+}
+
+impl<'a, T, Q, V> Request<'a, T, Q, V>
 where
     T: Iterator<Item = Header<'a>>,
+    Q: Iterator<Item = Query<'a>>,
     V: Version<'a>,
 {
     pub fn write_to<W: std::io::Write>(&mut self, w: &mut W) -> Result<usize, RequestWriteError> {
@@ -151,35 +201,47 @@ where
         };
 
         let method = self.method.as_str();
-        write!(w, "{method} {path} HTTP/{version}\r\n").unwrap();
+        write!(w, "{method} {path}")?;
+
+        let queries = &mut self.queries;
+        if let Some(q) = queries.next() {
+            EStr::<fluent_uri::encoding::encoder::Query>::new(q.q).ok_or(RequestWriteError::InvalidQuery)?;
+            write!(w, "?{}", q.q)?;
+            while let Some(q) = queries.next() {
+                EStr::<fluent_uri::encoding::encoder::Query>::new(q.q).ok_or(RequestWriteError::InvalidQuery)?;
+                write!(w,"&{}", q.q)?;
+            }
+        }
+
+        write!(w, " HTTP/{version}\r\n")?;
 
         let mut len = 9 + method.len() + path.len() + version.len();
         for header in &mut self.headers {
             len += crate::write_header(w, header).map_err(|e| (len, e))?;
         }
 
-        write!(w, "\r\n").unwrap();
+        write!(w, "\r\n")?;
         Ok(len + 2)
     }
 
     /// # Safety
     ///
     /// Caller must guarantee that all request fields are valid.
-    pub unsafe fn write_to_unchecked<W: std::io::Write>(&mut self, w: &mut W) -> usize {
+    pub unsafe fn write_to_unchecked<W: std::io::Write>(&mut self, w: &mut W) -> std::io::Result<usize> {
         let path = self.path.unwrap_or("/");
         let version = self.version.as_str();
         let method = self.method.as_str();
 
-        write!(w, "{method} {path} HTTP/{version}\r\n").unwrap();
+        write!(w, "{method} {path} HTTP/{version}\r\n")?;
 
         let mut len = 9 + method.len() + path.len() + version.len();
 
         for header in &mut self.headers {
-            len += unsafe { crate::write_header_unchecked(w, header) };
+            len += unsafe { crate::write_header_unchecked(w, header)? };
         }
 
-        write!(w, "\r\n").unwrap();
-        len + 2
+        write!(w, "\r\n")?;
+        Ok(len + 2)
     }
 }
 
@@ -218,15 +280,23 @@ impl<'a> Method<'a> {
 pub enum RequestWriteError {
     InvalidVersion,
     InvalidPath,
+    InvalidQuery,
     InvalidHeader {
         buffer_offset: usize,
         err: HeaderWriteError,
     },
+    Io,
 }
 
 impl From<(usize, HeaderWriteError)> for RequestWriteError {
     fn from((buffer_offset, err): (usize, HeaderWriteError)) -> RequestWriteError {
         RequestWriteError::InvalidHeader { buffer_offset, err }
+    }
+}
+
+impl From<std::io::Error> for RequestWriteError {
+    fn from(_: std::io::Error) -> RequestWriteError {
+        RequestWriteError::Io
     }
 }
 
@@ -248,4 +318,38 @@ fn request() {
     
     assert!(preq.parse(&buf).unwrap().is_complete());
     assert_eq!(preq.headers.len(), 3);
+}
+
+#[test]
+fn request_with_query() {
+    let mut buf = Vec::new();
+
+    let mut req = Request::new(Method::Get)
+        .v1_1()
+        .header("a", b"1")
+        .header("b", b"2")
+        .header("c", b"3")
+        .path("abc")
+        .query("a=b")
+        .query("b=c")
+    ;
+
+    req.write_to(&mut buf).unwrap();
+
+    let mut headers = [httparse::EMPTY_HEADER; 64];
+    let mut preq = httparse::Request::new(&mut headers);
+    
+    assert!(preq.parse(&buf).unwrap().is_complete());
+    assert_eq!(preq.headers.len(), 3);
+
+    let path = preq.path.unwrap();
+
+    use fluent_uri::encoding::{EStr, encoder::Path};
+    let query_pos = path.find(|ch| ch == '?').unwrap();
+    let (path, query) = path.split_at(query_pos);
+    let p = EStr::<Path>::new(path).unwrap();
+    let q = EStr::<fluent_uri::encoding::encoder::Query>::new(query).unwrap();
+
+    assert_eq!(p.as_str(), "abc");
+    assert_eq!(q.as_str(), "?a=b&b=c");
 }
